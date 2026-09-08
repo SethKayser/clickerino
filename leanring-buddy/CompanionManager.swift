@@ -11,6 +11,7 @@ import AVFoundation
 import Combine
 import Foundation
 import ScreenCaptureKit
+import Speech
 import SwiftUI
 
 enum CompanionVoiceState {
@@ -28,6 +29,7 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var hasAccessibilityPermission = false
     @Published private(set) var hasScreenRecordingPermission = false
     @Published private(set) var hasMicrophonePermission = false
+    @Published private(set) var hasSpeechRecognitionPermission = false
     @Published private(set) var hasScreenContentPermission = false
 
     /// Screen location (global AppKit coords) of a detected UI element the
@@ -87,10 +89,13 @@ final class CompanionManager: ObservableObject {
     /// speaks again before the delay elapses.
     private var transientHideTask: Task<Void, Never>?
 
-    /// True when all three required permissions (accessibility, screen recording,
-    /// microphone) are granted. Used by the panel to show a single "all good" state.
+    /// True when every permission required by the voice-and-screen pipeline is granted.
     var allPermissionsGranted: Bool {
-        hasAccessibilityPermission && hasScreenRecordingPermission && hasMicrophonePermission && hasScreenContentPermission
+        hasAccessibilityPermission
+            && hasScreenRecordingPermission
+            && hasMicrophonePermission
+            && hasSpeechRecognitionPermission
+            && hasScreenContentPermission
     }
 
     /// Whether the blue cursor overlay is currently visible on screen.
@@ -129,7 +134,7 @@ final class CompanionManager: ObservableObject {
 
     func start() {
         refreshAllPermissions()
-        print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
+        print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), speech: \(hasSpeechRecognitionPermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
@@ -148,8 +153,7 @@ final class CompanionManager: ObservableObject {
 
     /// Called by BlueCursorView after the buddy finishes its pointing
     /// animation and returns to cursor-following mode.
-    /// Triggers the onboarding sequence — dismisses the panel and restarts
-    /// the overlay so the welcome animation and intro video play.
+    /// Completes the lightweight local onboarding and shows the cursor.
     func triggerOnboarding() {
         // Post notification so the panel manager can dismiss the panel
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
@@ -159,11 +163,8 @@ final class CompanionManager: ObservableObject {
         hasCompletedOnboarding = true
 
 
-        // Play Besaid theme at 60% volume, fade out after 1m 30s
-        startOnboardingMusic()
-
-        // Show the overlay for the first time — isFirstAppearance triggers
-        // the welcome animation and onboarding video
+        // Skip the upstream hosted onboarding video in the local-first fork.
+        overlayWindowManager.hasShownOverlayBefore = true
         overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
         isOverlayVisible = true
     }
@@ -256,6 +257,7 @@ final class CompanionManager: ObservableObject {
         let previouslyHadAccessibility = hasAccessibilityPermission
         let previouslyHadScreenRecording = hasScreenRecordingPermission
         let previouslyHadMicrophone = hasMicrophonePermission
+        let previouslyHadSpeechRecognition = hasSpeechRecognitionPermission
 
         let currentlyHasAccessibility = WindowPositionManager.hasAccessibilityPermission()
         hasAccessibilityPermission = currentlyHasAccessibility
@@ -271,11 +273,14 @@ final class CompanionManager: ObservableObject {
         let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
         hasMicrophonePermission = micAuthStatus == .authorized
 
+        hasSpeechRecognitionPermission = SFSpeechRecognizer.authorizationStatus() == .authorized
+
         // Debug: log permission state on changes
         if previouslyHadAccessibility != hasAccessibilityPermission
             || previouslyHadScreenRecording != hasScreenRecordingPermission
-            || previouslyHadMicrophone != hasMicrophonePermission {
-            print("🔑 Permissions — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission)")
+            || previouslyHadMicrophone != hasMicrophonePermission
+            || previouslyHadSpeechRecognition != hasSpeechRecognitionPermission {
+            print("🔑 Permissions — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), speech: \(hasSpeechRecognitionPermission), screenContent: \(hasScreenContentPermission)")
         }
 
         // Screen content permission is persisted — once the user has approved the
@@ -630,8 +635,8 @@ final class CompanionManager: ObservableObject {
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     do {
                         try await textToSpeechClient.speakText(spokenText)
-                        // speakText returns after player.play() — audio is now playing
                         voiceState = .responding
+                        try await waitForSpeechPlaybackToFinish()
                     } catch {
                         print("⚠️ Text-to-speech error: \(error)")
                         await speakResponseErrorFallback()
@@ -687,6 +692,15 @@ final class CompanionManager: ObservableObject {
         let utterance = "Sorry, I couldn't finish that response. Please try again."
         try? await textToSpeechClient.speakText(utterance)
         voiceState = .responding
+        try? await waitForSpeechPlaybackToFinish()
+    }
+
+    /// Keeps the response task and UI state alive until system speech completes.
+    private func waitForSpeechPlaybackToFinish() async throws {
+        while textToSpeechClient.isPlaying {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     // MARK: - Point Tag Parsing

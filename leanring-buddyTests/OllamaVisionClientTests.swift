@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import leanring_buddy
 
+@MainActor
 struct OllamaVisionClientTests {
     @Test func parsesSuccessfulChatResponse() throws {
         let data = Data(#"{"message":{"role":"assistant","content":"  The Settings button is at the top right.  "},"done":true}"#.utf8)
