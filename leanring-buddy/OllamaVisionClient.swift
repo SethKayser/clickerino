@@ -97,7 +97,8 @@ final class OllamaVisionClient {
         request.httpBody = try JSONEncoder().encode(ChatRequest(
             model: model,
             messages: messages,
-            stream: false
+            stream: false,
+            options: ChatOptions(numPredict: 200, temperature: 0.2)
         ))
 
         let data: Data
@@ -185,6 +186,17 @@ private extension OllamaVisionClient {
         let model: String
         let messages: [ChatMessage]
         let stream: Bool
+        let options: ChatOptions
+    }
+
+    struct ChatOptions: Encodable {
+        let numPredict: Int
+        let temperature: Double
+
+        enum CodingKeys: String, CodingKey {
+            case numPredict = "num_predict"
+            case temperature
+        }
     }
 
     struct ChatMessage: Codable {
