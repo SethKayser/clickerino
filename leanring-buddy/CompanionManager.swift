@@ -21,6 +21,10 @@ enum CompanionVoiceState {
     case responding
 }
 
+enum CompanionPipelineError: Error {
+    case screenCapturePermissionRequired
+}
+
 @MainActor
 final class CompanionManager: ObservableObject {
     @Published private(set) var voiceState: CompanionVoiceState = .idle
@@ -31,6 +35,26 @@ final class CompanionManager: ObservableObject {
     @Published private(set) var hasMicrophonePermission = false
     @Published private(set) var hasSpeechRecognitionPermission = false
     @Published private(set) var hasScreenContentPermission = false
+    /// Short actionable error suitable for the panel, retained after a request finishes.
+    @Published private(set) var lastPipelineError: String?
+    @Published private(set) var lastDiagnosticDetail: String?
+    @Published private(set) var diagnosticLog: [String] = []
+    @Published private(set) var lastResponseText: String?
+    /// Full response timing for local diagnostics and the settings view.
+    @Published private(set) var lastResponseDuration: TimeInterval?
+    @Published private(set) var isResponseInFlight = false
+    @Published var selectedVisionModel: String = UserDefaults.standard.string(forKey: "selectedVisionModel") ?? AppBundleConfiguration.stringValue(forKey: "OLLAMA_VISION_MODEL") ?? OllamaVisionClient.defaultModel {
+        didSet {
+            UserDefaults.standard.set(selectedVisionModel, forKey: "selectedVisionModel")
+            localVisionClient.model = selectedVisionModel
+        }
+    }
+    @Published var screenCaptureMode: CompanionScreenCaptureMode = CompanionScreenCaptureMode(rawValue: UserDefaults.standard.string(forKey: "screenCaptureMode") ?? "cursorScreen") ?? .cursorScreen {
+        didSet { UserDefaults.standard.set(screenCaptureMode.rawValue, forKey: "screenCaptureMode") }
+    }
+    @Published private(set) var availableVisionModels: [String] = []
+    @Published private(set) var isOllamaAvailable = false
+    @Published private(set) var lastDoneReason: String?
 
     /// Screen location (global AppKit coords) of a detected UI element the
     /// buddy should fly to and point at. Parsed from the vision model response;
@@ -69,7 +93,7 @@ final class CompanionManager: ObservableObject {
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
-    private let localVisionClient = OllamaVisionClient()
+    private let localVisionClient: any CompanionVisionProvider = OllamaVisionClient()
 
     private let textToSpeechClient: any CompanionTextToSpeechClient = MacOSSystemTextToSpeechClient()
 
@@ -83,11 +107,55 @@ final class CompanionManager: ObservableObject {
     private var shortcutTransitionCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
+    private var dictationErrorCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     /// Scheduled hide for transient cursor mode — cancelled if the user
     /// speaks again before the delay elapses.
     private var transientHideTask: Task<Void, Never>?
+
+    /// Submits text through the same screenshot, vision, pointing, and speech
+    /// pipeline as push-to-talk. The panel can use this without reaching into
+    /// the private voice implementation.
+    func submitTypedPrompt(_ text: String) {
+        let trimmedText = Self.normalizedTypedPrompt(text)
+        guard !trimmedText.isEmpty else {
+            lastPipelineError = "Enter a question first"
+            return
+        }
+        sendTranscriptWithScreenshot(transcript: trimmedText)
+    }
+
+    func refreshOllamaStatus() async {
+        do {
+            let models = try await localVisionClient.listModels()
+            availableVisionModels = models
+            isOllamaAvailable = true
+            if !models.contains(selectedVisionModel), let firstVisionModel = models.first {
+                selectedVisionModel = firstVisionModel
+            }
+        } catch {
+            availableVisionModels = []
+            isOllamaAvailable = false
+        }
+    }
+
+    func clearPipelineError() {
+        lastPipelineError = nil
+    }
+
+    /// Stops the current model request and speech playback without showing an
+    /// error. This is used when the user starts a new interaction.
+    func cancelResponse() {
+        currentResponseTask?.cancel()
+        currentResponseTask = nil
+        textToSpeechClient.stopPlayback()
+        isResponseInFlight = false
+        voiceState = .idle
+        clearDetectedElementLocation()
+        recordDiagnostic("response cancelled")
+        scheduleTransientHideIfNeeded()
+    }
 
     /// True when every permission required by the voice-and-screen pipeline is granted.
     var allPermissionsGranted: Bool {
@@ -133,11 +201,13 @@ final class CompanionManager: ObservableObject {
     }
 
     func start() {
+        localVisionClient.model = selectedVisionModel
         refreshAllPermissions()
         print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), speech: \(hasSpeechRecognitionPermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
         startPermissionPolling()
         bindVoiceStateObservation()
         bindAudioPowerLevel()
+        bindDictationErrors()
         bindShortcutTransitions()
 
         // If the user already completed onboarding AND all permissions are
@@ -366,6 +436,23 @@ final class CompanionManager: ObservableObject {
             }
     }
 
+    private func bindDictationErrors() {
+        dictationErrorCancellable = buddyDictationManager.$lastErrorMessage
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] message in
+                guard let message, !message.isEmpty else { return }
+                self?.lastPipelineError = message
+                self?.recordDiagnostic("speech error: \(message)")
+            }
+    }
+
+    private func recordDiagnostic(_ detail: String) {
+        lastDiagnosticDetail = detail
+        diagnosticLog.append(detail)
+        if diagnosticLog.count > 50 { diagnosticLog.removeFirst(diagnosticLog.count - 50) }
+        print("ℹ️ Clicky: \(detail)")
+    }
+
     private func bindVoiceStateObservation() {
         voiceStateCancellable = buddyDictationManager.$isRecordingFromKeyboardShortcut
             .combineLatest(
@@ -432,6 +519,8 @@ final class CompanionManager: ObservableObject {
 
             // Cancel any in-progress response and TTS from a previous utterance
             currentResponseTask?.cancel()
+            currentResponseTask = nil
+            isResponseInFlight = false
             textToSpeechClient.stopPlayback()
             clearDetectedElementLocation()
 
@@ -522,15 +611,28 @@ final class CompanionManager: ObservableObject {
     private func sendTranscriptWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
         textToSpeechClient.stopPlayback()
+        lastPipelineError = nil
+        lastResponseText = nil
+        lastResponseDuration = nil
+        lastDoneReason = nil
+        isResponseInFlight = true
 
         currentResponseTask = Task {
+            guard !Task.isCancelled else { return }
             // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
 
             do {
                 // Capture all connected screens so the AI has full context
-                let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-
+                let screenCaptures: [CompanionScreenCapture]
+                if screenCaptureMode == .none {
+                    screenCaptures = []
+                } else if !hasScreenRecordingPermission || !hasScreenContentPermission {
+                    throw CompanionPipelineError.screenCapturePermissionRequired
+                } else {
+                    screenCaptures = try await CompanionScreenCaptureUtility.captureScreensAsJPEG(mode: screenCaptureMode)
+                }
+                recordDiagnostic(screenCaptures.isEmpty ? "request started without screen capture" : "captured \(screenCaptures.count) screen")
                 guard !Task.isCancelled else { return }
 
                 // Build image labels with the actual screenshot pixel dimensions
@@ -546,7 +648,7 @@ final class CompanionManager: ObservableObject {
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
                 }
 
-                let (fullResponseText, _) = try await localVisionClient.analyzeImageStreaming(
+                let (fullResponseText, responseDuration) = try await localVisionClient.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.companionVoiceResponseSystemPrompt,
                     conversationHistory: historyForAPI,
@@ -555,8 +657,12 @@ final class CompanionManager: ObservableObject {
                         // No streaming text display — spinner stays until TTS plays
                     }
                 )
-
                 guard !Task.isCancelled else { return }
+
+                lastResponseText = fullResponseText
+                lastResponseDuration = responseDuration
+                lastDoneReason = localVisionClient.lastDoneReason
+                recordDiagnostic("model answered in \(String(format: "%.1f", responseDuration))s (done reason: \(lastDoneReason ?? "unknown"))")
 
                 // Parse the [POINT:...] tag from the model response
                 let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
@@ -574,15 +680,16 @@ final class CompanionManager: ObservableObject {
                 // Pick the screen capture matching the model's screen number,
                 // falling back to the cursor screen if not specified.
                 let targetScreenCapture: CompanionScreenCapture? = {
-                    if let screenNumber = parseResult.screenNumber,
-                       screenNumber >= 1 && screenNumber <= screenCaptures.count {
+                    if let screenNumber = parseResult.screenNumber {
+                        guard screenNumber >= 1 && screenNumber <= screenCaptures.count else { return nil }
                         return screenCaptures[screenNumber - 1]
                     }
                     return screenCaptures.first(where: { $0.isCursorScreen })
                 }()
 
                 if let pointCoordinate = parseResult.coordinate,
-                   let targetScreenCapture {
+                   let targetScreenCapture,
+                   Self.isPointCoordinateWithinCapture(pointCoordinate, capture: targetScreenCapture) {
                     // The model's coordinates are in the screenshot's pixel space
                     // (top-left origin, e.g. 1280x831). Scale to the display's
                     // point space (e.g. 1512x982), then convert to AppKit global coords.
@@ -613,6 +720,9 @@ final class CompanionManager: ObservableObject {
                     detectedElementDisplayFrame = displayFrame
                     print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
                 } else {
+                    if parseResult.coordinate != nil {
+                        print("🎯 Ignoring out-of-bounds element coordinate")
+                    }
                     print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
                 }
 
@@ -637,23 +747,68 @@ final class CompanionManager: ObservableObject {
                         try await textToSpeechClient.speakText(spokenText)
                         voiceState = .responding
                         try await waitForSpeechPlaybackToFinish()
+                    } catch is CancellationError {
+                        return
                     } catch {
                         print("⚠️ Text-to-speech error: \(error)")
-                        await speakResponseErrorFallback()
+                        await speakResponseErrorFallback(message: "text to speech failed")
                     }
                 }
-            } catch is CancellationError {
+            } catch let error where Self.isExpectedCancellation(error) {
                 // User spoke again — response was interrupted
             } catch {
-                print("⚠️ Companion response error: \(error)")
-                await speakResponseErrorFallback()
+                print("⚠️ Companion response error: \(String(reflecting: error))")
+                if !Task.isCancelled {
+                    lastPipelineError = Self.userFacingPipelineMessage(for: error)
+                    recordDiagnostic("pipeline error: \(lastPipelineError ?? "unknown")")
+                    await speakResponseErrorFallback(message: lastPipelineError ?? "Could not finish that response")
+                }
             }
 
             if !Task.isCancelled {
+                currentResponseTask = nil
+                isResponseInFlight = false
                 voiceState = .idle
                 scheduleTransientHideIfNeeded()
             }
         }
+    }
+
+    static func normalizedTypedPrompt(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func isPointCoordinateWithinCapture(_ point: CGPoint, capture: CompanionScreenCapture) -> Bool {
+        point.x >= 0 && point.y >= 0
+            && point.x <= CGFloat(capture.screenshotWidthInPixels)
+            && point.y <= CGFloat(capture.screenshotHeightInPixels)
+    }
+
+    static func isExpectedCancellation(_ error: Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
+    }
+
+    static func userFacingPipelineMessage(for error: Error) -> String {
+        if let ollamaError = error as? OllamaVisionClientError {
+            switch ollamaError {
+            case .connectionFailed:
+                return "Ollama is unavailable"
+            case let .httpError(statusCode, _):
+                return statusCode == 404 ? "Model is not installed" : "Ollama request failed"
+            case .serverError:
+                return "Ollama could not answer"
+            case .emptyResponse:
+                return "Model returned no answer"
+            case .invalidResponse:
+                return "Ollama returned an invalid answer"
+            case .requestTimedOut:
+                return "Request timed out"
+            }
+        }
+        if error is CompanionPipelineError {
+            return "Screen recording permission is required"
+        }
+        return "Could not finish that response"
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
@@ -688,8 +843,8 @@ final class CompanionManager: ObservableObject {
 
     /// Speaks a short fallback message if the response or configured speech
     /// client fails, so the user is not left waiting without feedback.
-    private func speakResponseErrorFallback() async {
-        let utterance = "Sorry, I couldn't finish that response. Please try again."
+    private func speakResponseErrorFallback(message: String) async {
+        let utterance = "Sorry, \(message.lowercased()). Please try again."
         try? await textToSpeechClient.speakText(utterance)
         voiceState = .responding
         try? await waitForSpeechPlaybackToFinish()
@@ -726,7 +881,9 @@ final class CompanionManager: ObservableObject {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
               let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)) else {
             // No tag found at all
-            return PointingParseResult(spokenText: responseText, coordinate: nil, elementLabel: nil, screenNumber: nil)
+            let spokenText = responseText.components(separatedBy: "[POINT:").first?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? responseText
+            return PointingParseResult(spokenText: spokenText, coordinate: nil, elementLabel: nil, screenNumber: nil)
         }
 
         // Remove the tag from the spoken text
@@ -921,6 +1078,7 @@ final class CompanionManager: ObservableObject {
                 let (fullResponseText, _) = try await localVisionClient.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.onboardingDemoSystemPrompt,
+                    conversationHistory: [],
                     userPrompt: "look around my screen and find something interesting to point at",
                     onTextChunk: { _ in }
                 )

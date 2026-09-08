@@ -7,12 +7,26 @@
 
 import Foundation
 
+protocol CompanionVisionProvider: AnyObject {
+    var model: String { get set }
+    var lastDoneReason: String? { get }
+    func listModels() async throws -> [String]
+    func analyzeImageStreaming(
+        images: [(data: Data, label: String)],
+        systemPrompt: String,
+        conversationHistory: [(userPlaceholder: String, assistantResponse: String)],
+        userPrompt: String,
+        onTextChunk: @MainActor @Sendable (String) -> Void
+    ) async throws -> (text: String, duration: TimeInterval)
+}
+
 enum OllamaVisionClientError: LocalizedError, Equatable {
     case connectionFailed(endpoint: String, reason: String)
     case invalidResponse
     case httpError(statusCode: Int, message: String)
     case serverError(String)
     case emptyResponse
+    case requestTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +40,8 @@ enum OllamaVisionClientError: LocalizedError, Equatable {
             return "Ollama could not complete the request: \(message)"
         case .emptyResponse:
             return "Ollama returned an empty response. Check that the configured model supports images."
+        case .requestTimedOut:
+            return "Ollama took too long to respond."
         }
     }
 }
@@ -34,13 +50,14 @@ enum OllamaVisionClientError: LocalizedError, Equatable {
 ///
 /// Runtime configuration can be supplied through the app bundle using:
 /// - `OLLAMA_API_URL` (defaults to `http://127.0.0.1:11434/api/chat`)
-/// - `OLLAMA_VISION_MODEL` (defaults to `qwen3-vl:4b`)
-final class OllamaVisionClient {
+/// - `OLLAMA_VISION_MODEL` (defaults to `gemma3:4b`)
+final class OllamaVisionClient: CompanionVisionProvider {
     static let defaultEndpoint = URL(string: "http://127.0.0.1:11434/api/chat")!
-    static let defaultModel = "qwen3-vl:4b"
+    static let defaultModel = "gemma3:4b"
 
     let endpoint: URL
     var model: String
+    private(set) var lastDoneReason: String?
 
     private let session: URLSession
 
@@ -51,6 +68,7 @@ final class OllamaVisionClient {
     ) {
         self.endpoint = endpoint ?? Self.configuredEndpoint
         self.model = model ?? AppBundleConfiguration.stringValue(forKey: "OLLAMA_VISION_MODEL") ?? Self.defaultModel
+        self.lastDoneReason = nil
 
         if let session {
             self.session = session
@@ -71,6 +89,7 @@ final class OllamaVisionClient {
         userPrompt: String
     ) async throws -> (text: String, duration: TimeInterval) {
         let startedAt = Date()
+        lastDoneReason = nil
         var messages: [ChatMessage] = [
             ChatMessage(role: "system", content: systemPrompt, images: nil)
         ]
@@ -83,7 +102,9 @@ final class OllamaVisionClient {
         let labels = images.enumerated().map { index, image in
             "Screenshot \(index + 1): \(image.label)"
         }
-        let currentContent = (labels + [userPrompt]).joined(separator: "\n\n")
+        // The Qwen thinking tag may still exhaust its budget with this directive.
+        // Keep the hint for compatibility; always validate non-empty content.
+        let currentContent = (labels + [userPrompt, "/no_think"]).joined(separator: "\n\n")
         messages.append(ChatMessage(
             role: "user",
             content: currentContent,
@@ -98,7 +119,7 @@ final class OllamaVisionClient {
             model: model,
             messages: messages,
             stream: false,
-            options: ChatOptions(numPredict: 200, temperature: 0.2)
+            options: ChatOptions(numPredict: 512, temperature: 0.2)
         ))
 
         let data: Data
@@ -107,6 +128,10 @@ final class OllamaVisionClient {
             (data, response) = try await session.data(for: request)
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch let error as URLError where error.code == .timedOut {
+            throw OllamaVisionClientError.requestTimedOut
         } catch {
             throw OllamaVisionClientError.connectionFailed(
                 endpoint: endpoint.absoluteString,
@@ -124,8 +149,29 @@ final class OllamaVisionClient {
             throw OllamaVisionClientError.httpError(statusCode: httpResponse.statusCode, message: message)
         }
 
-        let text = try Self.parseResponse(data)
+        lastDoneReason = Self.doneReason(from: data)
+        let parsedResponse = try Self.parseResponseDetails(data)
+        lastDoneReason = parsedResponse.doneReason
+        let text = parsedResponse.text
         return (text: text, duration: Date().timeIntervalSince(startedAt))
+    }
+
+    func listModels() async throws -> [String] {
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        components?.path = "/api/tags"
+        guard let modelsURL = components?.url else { throw OllamaVisionClientError.invalidResponse }
+        var request = URLRequest(url: modelsURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch is CancellationError { throw CancellationError() }
+        guard let httpResponse = response as? HTTPURLResponse else { throw OllamaVisionClientError.invalidResponse }
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw OllamaVisionClientError.httpError(statusCode: httpResponse.statusCode, message: String(data: data, encoding: .utf8) ?? "")
+        }
+        return try JSONDecoder().decode(ModelTagsResponse.self, from: data).models.map(\.name)
     }
 
     /// Compatibility helper for the current companion flow. Ollama still receives a
@@ -148,6 +194,10 @@ final class OllamaVisionClient {
     }
 
     static func parseResponse(_ data: Data) throws -> String {
+        try parseResponseDetails(data).text
+    }
+
+    static func parseResponseDetails(_ data: Data) throws -> (text: String, doneReason: String?) {
         let response: ChatResponse
         do {
             response = try JSONDecoder().decode(ChatResponse.self, from: data)
@@ -163,7 +213,11 @@ final class OllamaVisionClient {
               !text.isEmpty else {
             throw OllamaVisionClientError.emptyResponse
         }
-        return text
+        return (text: text, doneReason: response.doneReason)
+    }
+
+    static func doneReason(from data: Data) -> String? {
+        (try? JSONDecoder().decode(ChatResponse.self, from: data))?.doneReason
     }
 
     private static var configuredEndpoint: URL {
@@ -208,5 +262,16 @@ private extension OllamaVisionClient {
     struct ChatResponse: Decodable {
         let message: ChatMessage?
         let error: String?
+        let doneReason: String?
+
+        enum CodingKeys: String, CodingKey {
+            case message, error
+            case doneReason = "done_reason"
+        }
+    }
+
+    struct ModelTagsResponse: Decodable {
+        struct Model: Decodable { let name: String }
+        let models: [Model]
     }
 }
