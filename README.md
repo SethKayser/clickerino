@@ -1,3 +1,35 @@
+# Clickerino
+
+Clickerino is Seth's experimental, free-local fork of the original Clicky macOS
+companion. Version one keeps the original push-to-talk, screen capture and blue
+pointer interaction while replacing its three paid services:
+
+- Apple Speech performs speech recognition.
+- Qwen3-VL 4B runs locally through Ollama for screen understanding.
+- macOS system speech reads the response aloud.
+
+No API key or Cloudflare Worker is required for this local mode. Analytics and
+the original email collection are disabled. See [LEARNING.md](LEARNING.md) for
+the setup, architecture, exercises and known limitations.
+
+## Run the local version
+
+1. Install and start [Ollama](https://ollama.com/).
+2. Download the local vision model with `ollama pull qwen3-vl:4b`.
+3. Open `leanring-buddy.xcodeproj` in Xcode.
+4. Select the `leanring-buddy` target and your personal development team.
+5. Run from Xcode and grant microphone, speech recognition, screen recording,
+   screen content and Accessibility permissions when macOS asks.
+6. Hold Control+Option, speak, then release.
+
+The model and endpoint can be changed through `OLLAMA_VISION_MODEL` and
+`OLLAMA_API_URL` in `leanring-buddy/Info.plist`.
+
+## Original project notice
+
+The material below is the original upstream README, retained with its history
+and MIT licence context.
+
 Update: April 27, 2026.
 
 Hi there! I'm Farza, the guy that made Clicky.
