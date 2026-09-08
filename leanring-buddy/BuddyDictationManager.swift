@@ -14,7 +14,7 @@ import Foundation
 import Speech
 
 enum BuddyPushToTalkShortcut {
-    enum ShortcutOption {
+    enum ShortcutOption: String, CaseIterable {
         case shiftFunction
         case controlOption
         case shiftControl
@@ -92,10 +92,12 @@ enum BuddyPushToTalkShortcut {
         case keyUp
     }
 
-    static let currentShortcutOption: ShortcutOption = .controlOption
+    static var currentShortcutOption: ShortcutOption {
+        ShortcutOption(rawValue: UserDefaults.standard.string(forKey: "localPushToTalkShortcut") ?? "") ?? .controlOption
+    }
     static let pushToTalkKeyCode: UInt16 = 49 // Space
-    static let pushToTalkDisplayText = currentShortcutOption.displayText
-    static let pushToTalkTooltipText = "push to talk (\(pushToTalkDisplayText))"
+    static var pushToTalkDisplayText: String { currentShortcutOption.displayText }
+    static var pushToTalkTooltipText: String { "push to talk (\(pushToTalkDisplayText))" }
 
     static func shortcutTransition(
         for event: NSEvent,
@@ -546,7 +548,9 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         self.activeTranscriptionSession = activeTranscriptionSession
         print("🎙️ BuddyDictationManager: provider ready, starting audio engine")
 
+        NotificationCenter.default.post(name: .clickyVoiceCaptureWillStart, object: nil)
         let inputNode = audioEngine.inputNode
+        try LocalMicrophoneSelection.apply(to: inputNode)
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         inputNode.removeTap(onBus: 0)

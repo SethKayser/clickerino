@@ -87,9 +87,10 @@ private final class AppleSpeechTranscriptionSession: NSObject, BuddyStreamingTra
         recognitionRequest.taskHint = .dictation
         recognitionRequest.addsPunctuation = true
 
-        if speechRecognizer.supportsOnDeviceRecognition {
-            recognitionRequest.requiresOnDeviceRecognition = true
+        guard speechRecognizer.supportsOnDeviceRecognition else {
+            throw AppleSpeechTranscriptionProviderError(message: "On-device speech recognition is unavailable for this language. Use typed input or install a supported dictation language in macOS Settings.")
         }
+        recognitionRequest.requiresOnDeviceRecognition = true
 
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             self?.handleRecognitionEvent(result: result, error: error)

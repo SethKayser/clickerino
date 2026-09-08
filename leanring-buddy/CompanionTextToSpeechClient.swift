@@ -29,6 +29,13 @@ final class MacOSSystemTextToSpeechClient: CompanionTextToSpeechClient {
         stopPlayback()
 
         let speechUtterance = AVSpeechUtterance(string: textToSpeak)
+        let voiceIdentifier = UserDefaults.standard.string(forKey: "localSpeechVoiceIdentifier") ?? ""
+        if !voiceIdentifier.isEmpty {
+            speechUtterance.voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
+        }
+        if let speechRate = UserDefaults.standard.object(forKey: "localSpeechRate") as? Double {
+            speechUtterance.rate = Float(min(0.65, max(0.3, speechRate)))
+        }
         speechSynthesizer.speak(speechUtterance)
     }
 
