@@ -1,0 +1,105 @@
+{
+  "benchmark": "clicky-local-vision-v1",
+  "image": "leanring-buddy/Assets.xcassets/codex-app-screenshot.imageset/codex-app-screenshot.jpg",
+  "image_bytes": 60050,
+  "endpoint": "http://127.0.0.1:11434/api/chat",
+  "no_think": true,
+  "models": {
+    "qwen3-vl:4b": {
+      "metadata": {
+        "family": "qwen3vl",
+        "parameter_size": "4.4B",
+        "quantization_level": "Q4_K_M"
+      },
+      "cases": [
+        {
+          "elapsed_seconds": 12.41,
+          "http_status": 200,
+          "done_reason": "stop",
+          "answer": "The app shown is Codex, and the two prominent central texts are \"Let's build\" and \"Codex\".",
+          "thinking": "So, let's look at the image. The app is a development or coding tool, probably related to Codex. The central text says \"Let's build\" and there's a \"Codex\" dropdown. Wait, the app is likely GitHub Copilot or something similar, but the main text in the center is \"Let's build\" and the project name is Codex. Wait, the left sidebar has \"Codex\" as a section. The central text is \"Let's build\" and the dropdown says \"Codex\". So the app is Codex (maybe a tool by GitHub), and the two prominent central texts are \"Let's build\" and \"Codex\".",
+          "error": null,
+          "eval_count": 165,
+          "prompt_eval_count": 2011,
+          "ollama_ps": "NAME           ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \nqwen3-vl:4b    1343d82ebee3    4.4 GB    100% GPU     4096       4 minutes from now    \ngemma3:4b      a2af6cc3eb7f    4.2 GB    100% GPU     4096       3 minutes from now",
+          "question_id": "visual_summary",
+          "expected": "Mentions a Codex-style app and both \"Let's build\" and \"Codex\"."
+        },
+        {
+          "elapsed_seconds": 26.77,
+          "http_status": 200,
+          "done_reason": "length",
+          "answer": "",
+          "thinking": "Got it, let's find the center of the white circular send button. First, look at the composer area. The send button is a white circle with an up arrow, located at the lower right of the composer. The composer is the input box at the bottom. Let's check the coordinates.\n\nThe screen is 2000x1125. The composer is in the lower part. The send button is a small circle. Let's estimate the position. The button is at the right end of the composer. The composer's input field is probably around the bottom. Let's see the image: the send button is a white circle with an up arrow, and it's in the lower right corner of the input area.\n\nLooking at the layout, the send button is likely near the bottom right. Let's calculate the center. The screen's width is 2000, height 1125. The button's position: since it's a small circle, the center would be around the x-coordinate of the right side, and y-coordinate of the bottom.\n\nWait, the image shows the send button as a white circle with an up arrow. Let's check the position. The composer is the input bar at the bottom. The send button is to the right of the input field. Let's assume the input field is from left to right, and the button is at the far right.\n\nIn the screenshot, the send button is a small circle. Let's find its center. Let's think about the coordinates. The screen is 2000x1125. The button's position: the x-coordinate would be towards the right, y towards the bottom.\n\nLooking at the image, the send button is in the lower right. Let's estimate. The input field is at the bottom, so the y-coordinate is around 1125 minus some value. The button is a small circle, so the center's y is probably around 1125 - 100 (since the input field is at the bottom). Wait, the screen's height is 1125, so the bottom is y=1125. The input field's bottom is at the bottom of the screen, so the send button is near the bottom.\n\nWait, the image shows the send button as a white circle with an up arrow. Let's check the position. The button is at the right end of the input bar. The input bar is a rectangle, and the button is",
+          "error": null,
+          "eval_count": 512,
+          "prompt_eval_count": 2041,
+          "ollama_ps": "NAME           ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \nqwen3-vl:4b    1343d82ebee3    4.4 GB    100% GPU     4096       4 minutes from now    \ngemma3:4b      a2af6cc3eb7f    4.2 GB    100% GPU     4096       2 minutes from now",
+          "question_id": "coordinate",
+          "expected": "Centre approximately x=1460, y=910; valid JSON with numeric x and y."
+        },
+        {
+          "elapsed_seconds": 7.681,
+          "http_status": 200,
+          "done_reason": "stop",
+          "answer": "APP=Codex\nSTATE=New thread\nMODE=Local",
+          "thinking": "Got it, let's look at the image. The left sidebar has \"Codex\" under Threads, and the main window title is \"New thread\". The bottom part shows \"Local\" as one of the options. So we need to extract those three lines.\n\nFirst, APP: the sidebar has \"Codex\" as the selected thread, so APP=Codex.\n\nSTATE: the main window title is \"New thread\", so STATE=New thread.\n\nMODE: the bottom has \"Local\", \"Worktree\", \"Cloud\", so MODE=Local.\n\nMake sure to output exactly those three lines without any extra text.",
+          "error": null,
+          "eval_count": 141,
+          "prompt_eval_count": 2019,
+          "ollama_ps": "NAME           ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \nqwen3-vl:4b    1343d82ebee3    4.4 GB    100% GPU     4096       4 minutes from now    \ngemma3:4b      a2af6cc3eb7f    4.2 GB    100% GPU     4096       2 minutes from now",
+          "question_id": "instruction_following",
+          "expected": "Exact three-line output."
+        }
+      ]
+    },
+    "gemma3:4b": {
+      "metadata": {
+        "family": "gemma3",
+        "parameter_size": "4.3B",
+        "quantization_level": "Q4_K_M"
+      },
+      "cases": [
+        {
+          "elapsed_seconds": 1.887,
+          "http_status": 200,
+          "done_reason": "stop",
+          "answer": "Here\u2019s the answer:\n\nThe image shows the Codex interface, with the prominent central texts reading \u201cLet\u2019s build\u201d and \u201cCodex\u201d.",
+          "thinking": "",
+          "error": null,
+          "eval_count": 32,
+          "prompt_eval_count": 290,
+          "ollama_ps": "NAME           ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ngemma3:4b      a2af6cc3eb7f    4.2 GB    100% GPU     4096       4 minutes from now    \nqwen3-vl:4b    1343d82ebee3    4.4 GB    100% GPU     4096       4 minutes from now",
+          "question_id": "visual_summary",
+          "expected": "Mentions a Codex-style app and both \"Let's build\" and \"Codex\"."
+        },
+        {
+          "elapsed_seconds": 1.44,
+          "http_status": 200,
+          "done_reason": "stop",
+          "answer": "```json\n{\"x\": 768, \"y\": 544}\n```",
+          "thinking": "",
+          "error": null,
+          "eval_count": 22,
+          "prompt_eval_count": 320,
+          "ollama_ps": "NAME           ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ngemma3:4b      a2af6cc3eb7f    4.2 GB    100% GPU     4096       4 minutes from now    \nqwen3-vl:4b    1343d82ebee3    4.4 GB    100% GPU     4096       4 minutes from now",
+          "question_id": "coordinate",
+          "expected": "Centre approximately x=1460, y=910; valid JSON with numeric x and y."
+        },
+        {
+          "elapsed_seconds": 0.983,
+          "http_status": 200,
+          "done_reason": "stop",
+          "answer": "APP=Codex\nSTATE=New thread\nMODE=Local",
+          "thinking": "",
+          "error": null,
+          "eval_count": 14,
+          "prompt_eval_count": 298,
+          "ollama_ps": "NAME           ID              SIZE      PROCESSOR    CONTEXT    UNTIL              \ngemma3:4b      a2af6cc3eb7f    4.2 GB    100% GPU     4096       4 minutes from now    \nqwen3-vl:4b    1343d82ebee3    4.4 GB    100% GPU     4096       4 minutes from now",
+          "question_id": "instruction_following",
+          "expected": "Exact three-line output."
+        }
+      ]
+    }
+  }
+}

@@ -37,10 +37,10 @@ final class CompanionAppDelegate: NSObject, NSApplicationDelegate {
         print("🎯 Clicky: Starting...")
         print("🎯 Clicky: Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown")")
 
-        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 0])
+        let showInDock = UserDefaults.standard.bool(forKey: "showInDock")
+        NSApp.setActivationPolicy(showInDock ? .regular : .accessory)
 
-        ClickyAnalytics.configure()
-        ClickyAnalytics.trackAppOpened()
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 0])
 
         menuBarPanelManager = MenuBarPanelManager(companionManager: companionManager)
         companionManager.start()
